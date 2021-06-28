@@ -707,9 +707,9 @@ func getAlarms(values *PumpData.PumpData) string {
 func logValues(values *PumpData.PumpData, pumpValues *PumpData.PumpData) {
 
 	// Only log data if the heat pump is switch on.
-	if !values.Coil[16] {
-		return
-	}
+	//	if !values.Coil[16] {
+	//		return
+	//	}
 	//var Alarms = ""
 	//
 	//for _, ep := range hpEndPoints {
@@ -732,7 +732,7 @@ func logValues(values *PumpData.PumpData, pumpValues *PumpData.PumpData) {
 		values.Holding[25], values.Holding[26], values.Holding[27], pumpValues.Input[11], pumpValues.Input[12],
 		values.Coil[0], values.Coil[1], values.Coil[2], values.Coil[3], values.Coil[4], values.Coil[5],
 		values.Coil[6], values.Coil[7], values.Coil[8], values.Coil[9], values.Coil[10], values.Coil[11],
-		values.Coil[12], getAlarms(values), pumpValues.Input[7], pumpValues.Input[6])
+		values.Coil[12], getAlarms(values), pumpValues.Input[3], pumpValues.Input[4], pumpValues.Input[7])
 	if err != nil {
 		log.Println(err)
 	}
@@ -796,15 +796,24 @@ func CyclePumps() {
 }
 
 func reportValues() {
+	var ticks int8 = 0
 	ticker := time.NewTicker(time.Second)
 	quit := make(chan struct{})
+	log.Print("starting the data logger")
 
 	for {
 		select {
 		case <-ticker.C:
+			//			log.Println("Getting pump data - ticks = ", ticks)
 			getValues(false, lastPumpData, mbus)
+			//			log.Println("Getting heatpump data")
 			getValues(false, lastHeatPumpData, mbus)
-			logValues(lastHeatPumpData, lastPumpData)
+			ticks++
+			if ticks > 4 {
+				//				log.Println("Logging heatpump values.")
+				logValues(lastHeatPumpData, lastPumpData)
+				ticks = 0
+			}
 			if !lastHeatPumpData.Coil[InverterPowerAlarm-1] {
 				// No power alarm so clear the flag and reset the time
 				lastAlarmTime = time.Unix(0, 0)
@@ -1332,12 +1341,12 @@ func main() {
 		"`MotorVoltage`,`InverterTemperature`,`BusVoltage`,`GroundLoopInTemp`,`GroundLoopOutTemp`," +
 		"`WaterFlowSwitch`,`EmergencySwitch`,`EndTeminalSignalSwitch`,`HighFan`,`LowFan`," +
 		"`FourWayValve`,`MainWaterPump`,`ThreePortValveForWaterCircuit`,`CrankshaftHeater`,`ChassisHeater`," +
-		"`EndTerminalWaterPump`,`ElectricHeater`,`UnitStart`,`Alarms`,`RejectInTemp`,`RejectOutTemp`)" +
+		"`EndTerminalWaterPump`,`ElectricHeater`,`UnitStart`,`Alarms`,`RejectInTemp`,`RejectOutTemp`,`Insolation`)" +
 		" values (now(),?,?,?,?,?,?,?,?,?,?," +
 		"?,?,?,?,?,?,?,?,?,?," +
 		"?,?,?,?,?,?,?,?,?,?," +
 		"?,?,?,?,?,?,?,?,?,?," +
-		"?,?,?,?,?,?)")
+		"?,?,?,?,?,?,?)")
 	if err != nil {
 		log.Println(err.Error()) // proper error handling instead of panic in your app
 
