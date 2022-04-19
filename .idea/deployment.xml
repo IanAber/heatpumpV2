@@ -5,11 +5,8 @@
       <paths name="HeatPumpV2">
         <serverdata>
           <mappings>
-            <mapping deploy="/projects/go/src/heatpumpV2" local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/projects/go/src/heatpump" local="$PROJECT_DIR$" web="/" />
           </mappings>
-          <excludedPaths>
-            <excludedPath local="true" path="$PROJECT_DIR$/bin/MAC" />
-          </excludedPaths>
         </serverdata>
       </paths>
     </serverData>

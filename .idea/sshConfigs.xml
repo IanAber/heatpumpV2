@@ -3,6 +3,7 @@
   <component name="SshConfigs">
     <configs>
       <sshConfig authType="PASSWORD" connectionConfig="{&quot;serverAliveInterval&quot;:300}" host="AberHome1.local" id="5382cecc-6cb0-4554-a69b-91d8821517fb" port="22" nameFormat="DESCRIPTIVE" username="pi" />
+      <sshConfig authType="PASSWORD" host="cedartechnology.duckdns.org" id="ce97ed46-df1c-4715-91ea-a3ee5e2e324a" port="30022" nameFormat="DESCRIPTIVE" username="pi" useOpenSSHConfig="true" />
     </configs>
   </component>
 </project>
