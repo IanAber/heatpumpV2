@@ -18,7 +18,8 @@ import (
 	"time"
 )
 
-var CommsPort = flag.String("Port", "/dev/tty.usbserial-1424430", "communication port for the Heat Pump")
+// -Port=/dev/serial/by-path/platform-3f980000.usb-usb-0:1.2.1:1.0-port0 -baudrate=19200 -webport=8085 -hpslave=1 -pumpslave=10
+var CommsPort = flag.String("Port", "/dev/ttyHeatpump", "communication port for the Heat Pump")
 var BaudRate = flag.Int("baudrate", 19200, "communication port baud rate for the Heat Pump")
 var DataBits = flag.Int("databits", 8, "communication port data bits for the Heat Pump")
 var StopBits = flag.Int("stopbits", 2, "communication port stop bits for the Heat Pump")
@@ -59,15 +60,18 @@ type ModbusEndPoint struct {
 	writeable  bool
 }
 
-const HotPump = 1
-const ColdFlow = 2
-const ColdPump = 2
-const RejectFlow = 3
-const RejectPump = 3
-const InverterContactor = 4
+const HotPump = 1           // Coil
+const ColdFlow = 2          // Discrete Input
+const ColdPump = 2          // Coil
+const ColdPumpSetting = 3   // Holding register
+const RejectFlow = 3        // Discrete Input
+const RejectPump = 3        // Coil
+const RejectPumpSetting = 4 // Holding register
+const InverterContactor = 4 // Coil
 
-const InTemp = 1
-const OutTemp = 2
+const InTemp = 1  // Input Register
+const OutTemp = 2 // Input Register
+
 const BmsOn = 17
 const SetpointCold = 13
 
@@ -359,14 +363,36 @@ func webToggleCoil(_ http.ResponseWriter, r *http.Request) {
 func getHeatPumpDisposition() (rejectPumpOn bool, coldPumpOn bool, heatPumpOn bool, err error) {
 	rejectPump, err := mbus.ReadHoldingRegister(4, lastPumpData.SlaveAddress())
 	if err != nil {
+		log.Println(err)
 		return
 	}
-	rejectPumpOn = rejectPump > 99
+	rejectPumpRelay, err := mbus.ReadCoil(RejectPump, lastPumpData.SlaveAddress())
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	rejectPumpFlow, err := mbus.ReadDiscreteInput(RejectFlow, lastPumpData.SlaveAddress())
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	rejectPumpOn = (rejectPump > 99) && rejectPumpRelay && !rejectPumpFlow
 	coldPump, err := mbus.ReadHoldingRegister(3, lastPumpData.SlaveAddress())
 	if err != nil {
+		log.Println(err)
 		return
 	}
-	coldPumpOn = coldPump > 99
+	coldPumpRelay, err := mbus.ReadCoil(ColdPump, lastPumpData.SlaveAddress())
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	coldPumpFlow, err := mbus.ReadDiscreteInput(ColdFlow, lastPumpData.SlaveAddress())
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	coldPumpOn = (coldPump > 99) && coldPumpRelay && !coldPumpFlow
 	heatPumpOn, err = mbus.ReadCoil(17, lastHeatPumpData.SlaveAddress())
 	if err != nil {
 		return
@@ -485,7 +511,7 @@ func webChangeHeatPumpSetpoint(w http.ResponseWriter, r *http.Request) {
 
 func startHeatPump() {
 	for loops := 0; loops < 10; loops++ {
-		if lastPumpData.Discrete[ColdFlow-1] || lastPumpData.Discrete[RejectFlow-1] {
+		if lastPumpData.Discrete[ColdFlow-1] || lastPumpData.Discrete[RejectFlow-1] || !lastPumpData.Coil[ColdPump-1] || !lastPumpData.Coil[RejectPump-1] {
 			time.Sleep(time.Second * 15)
 		} else {
 			err := mbus.WriteCoil(BMSONOFF, true, lastHeatPumpData.SlaveAddress())
@@ -496,7 +522,14 @@ func startHeatPump() {
 			}
 		}
 	}
-	log.Println("Timed out waiting for the pumps to start up. Heat Pump was not started.")
+	log.Println("Timed out waiting for the circulators to start up. Heat Pump was not started. Turning the circulators off.")
+	// Turn the pumps off again so the system will retry on the next loop
+	if err := mbus.WriteHoldingRegister(4, 0, lastPumpData.SlaveAddress()); err != nil {
+		log.Print(`{"request":"TurnOffRejectPump","status":"ERROR","error":"%s"}`, err)
+	}
+	if err := mbus.WriteHoldingRegister(3, 0, lastPumpData.SlaveAddress()); err != nil {
+		log.Print(`{"request":"TurnOffColdPump","status":"ERROR","error":"%s"}`, err)
+	}
 }
 
 func webStartHeatPump(w http.ResponseWriter, _ *http.Request) {
@@ -519,7 +552,7 @@ func webStartHeatPump(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	if !rejectPump {
-		err = mbus.WriteHoldingRegister(4, 100, lastPumpData.SlaveAddress())
+		err = mbus.WriteHoldingRegister(RejectPumpSetting, 100, lastPumpData.SlaveAddress())
 		if err != nil {
 			_, err = fmt.Fprintf(w, `{"request":"TurnOnRejectPump","status":"ERROR","error":"%s"}`, err)
 			if err != nil {
@@ -531,7 +564,7 @@ func webStartHeatPump(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	if !coldPump {
-		err = mbus.WriteHoldingRegister(3, 100, lastPumpData.SlaveAddress())
+		err = mbus.WriteHoldingRegister(ColdPumpSetting, 100, lastPumpData.SlaveAddress())
 		if err != nil {
 			_, err = fmt.Fprintf(w, `{"request":"TurnOnColdPump","status":"ERROR","error":"%s"}`, err)
 			if err != nil {
@@ -665,6 +698,8 @@ func getValues(bRefresh bool, lastValues *PumpData.PumpData, p *PumpController.P
 		source = "pump controller"
 	}
 	newValues := PumpData.New(lastValues.GetSpecs())
+	// Delay between slaves.  We need this for some slave devices.
+	time.Sleep(time.Millisecond * 50)
 	if len(newValues.Discrete) > 0 {
 		mbData, err := p.ReadMultipleDiscreteRegisters(newValues.DiscreteStart(), uint16(len(newValues.Discrete)), newValues.SlaveAddress())
 		if err != nil {
@@ -674,6 +709,7 @@ func getValues(bRefresh bool, lastValues *PumpData.PumpData, p *PumpController.P
 		copy(newValues.Discrete[:], mbData)
 	}
 	if len(newValues.Coil) > 0 {
+		time.Sleep(time.Millisecond * 5)
 		mbData, err := p.ReadMultipleCoils(newValues.CoilStart(), uint16(len(newValues.Coil)), newValues.SlaveAddress())
 		if err != nil {
 			log.Println("Error getting ", source, " coils - ", err)
@@ -683,6 +719,7 @@ func getValues(bRefresh bool, lastValues *PumpData.PumpData, p *PumpController.P
 	}
 	if len(newValues.Holding) > 0 {
 		//		fmt.Println("Holding registers starting at ", newValues.HoldingStart(), " for ", uint16(len(newValues.Holding)), " values")
+		time.Sleep(time.Millisecond * 5)
 		mbUintData, err := p.ReadMultipleHoldingRegisters(newValues.HoldingStart(), uint16(len(newValues.Holding)), newValues.SlaveAddress())
 		if err != nil {
 			log.Println("Error getting ", source, " holding registers - ", err)
@@ -691,6 +728,7 @@ func getValues(bRefresh bool, lastValues *PumpData.PumpData, p *PumpController.P
 		copy(newValues.Holding[:], mbUintData)
 	}
 	if len(newValues.Input) > 0 {
+		time.Sleep(time.Millisecond * 5)
 		mbUintData, err := p.ReadMultipleInputRegisters(newValues.InputStart(), uint16(len(newValues.Input)), newValues.SlaveAddress())
 		if err != nil {
 			log.Println("Error getting ", source, " input registers - ", err)
@@ -812,25 +850,25 @@ The heat pump inverter has gone offline and I am cycling the power to it to try 
 }
 
 func CyclePumps() {
-	err := mbus.WriteCoil(2, false, lastPumpData.SlaveAddress())
+	err := mbus.WriteCoil(ColdPump, false, lastPumpData.SlaveAddress())
 	if err != nil {
 		log.Println(err)
 	}
-	err = mbus.WriteCoil(3, false, lastPumpData.SlaveAddress())
+	err = mbus.WriteCoil(RejectPump, false, lastPumpData.SlaveAddress())
 	if err != nil {
 		log.Println(err)
 	}
-	time.Sleep(time.Second)
-	err = mbus.WriteCoil(2, true, lastPumpData.SlaveAddress())
+	time.Sleep(time.Second * 3)
+	err = mbus.WriteCoil(ColdPump, true, lastPumpData.SlaveAddress())
 	if err != nil {
 		log.Println(err)
 	}
-	err = mbus.WriteCoil(3, true, lastPumpData.SlaveAddress())
+	err = mbus.WriteCoil(RejectPump, true, lastPumpData.SlaveAddress())
 	if err != nil {
 		log.Println(err)
 	}
-	// Give the pumps 30 seconds to get running again then reset the alarm code on the heat pump
-	time.AfterFunc(time.Second*30, func() {
+	// Give the pumps 15 seconds to get running again then reset the alarm code on the heat pump
+	time.AfterFunc(time.Second*15, func() {
 		err := mbus.WriteCoil(ALARMRESET, true, lastHeatPumpData.SlaveAddress())
 		if err != nil {
 			log.Print(err)
@@ -851,7 +889,7 @@ func reportValues() {
 			getValues(false, lastPumpData, mbus)
 			//			log.Println("Getting heatpump data")
 			getValues(false, lastHeatPumpData, mbus)
-			if lastPumpData.Discrete[ColdFlow-1] || lastPumpData.Discrete[RejectFlow-1] {
+			if lastPumpData.Discrete[ColdFlow-1] || lastPumpData.Discrete[RejectFlow-1] || !lastPumpData.Coil[ColdPump-1] || !lastPumpData.Coil[RejectPump-1] {
 				_, _, heatPump, err := getHeatPumpDisposition()
 				if err != nil {
 					log.Println("Error getting heatpump disposition : ", err)
@@ -859,15 +897,15 @@ func reportValues() {
 					if err != nil {
 						log.Print("Error turning the heat pump off", err)
 					}
-				} else {
-					if heatPump {
-						log.Println("--ERROR!-- Heat pump is on but circulators are not showing adequate flow. Stopping the heat pump")
-						err = mbus.WriteCoil(17, false, lastHeatPumpData.SlaveAddress())
-						if err != nil {
-							log.Print("Error turning the heat pump off", err)
-						}
+				}
+				if heatPump {
+					log.Println("--ERROR!-- Heat pump is on but circulators are not showing adequate flow. Stopping the heat pump")
+					err = mbus.WriteCoil(17, false, lastHeatPumpData.SlaveAddress())
+					if err != nil {
+						log.Print("Error turning the heat pump off", err)
 					}
 				}
+
 			}
 			ticks++
 			if ticks > 4 {
@@ -880,7 +918,7 @@ func reportValues() {
 				lastAlarmTime = time.Unix(0, 0)
 				//				cycleInverterPower = false
 			} else {
-				// If the time is '0' then record the current time as when the alrm was first seen
+				// If the time is '0' then record the current time as when the alarm was first seen
 				if lastAlarmTime == time.Unix(0, 0) {
 					lastAlarmTime = time.Now()
 				}
@@ -1380,7 +1418,7 @@ func init() {
 	flag.Parse()
 	lastPumpData = PumpData.New("p", 8, 1, 4, 1, 16, 1, 6, 1, uint8(*pumpSlaveAddress))
 	lastHeatPumpData = PumpData.New("hp", 138, 1, 0, 1, 0, 1, 28, 1, uint8(*hpSlaveAddress))
-
+	log.SetFlags(log.Lshortfile | log.LstdFlags)
 }
 
 func closedb(db *sql.DB) {
@@ -1391,7 +1429,7 @@ func closedb(db *sql.DB) {
 }
 func main() {
 
-	db, err := sql.Open("mysql", "pi:7444561@tcp(localhost:3306)/logging")
+	db, err := sql.Open("mysql", "logger:logger@tcp(localhost:3306)/logging")
 	// defer the close till after the main function has finished executing
 	if err != nil {
 		log.Println(err)
