@@ -321,6 +321,7 @@ func webControlHeatPump(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	//	log.Println("HeatPump:", payload)
 	if payload.HeatPump {
 		webStartHeatPump(w, r)
 	} else {
@@ -376,7 +377,8 @@ func getHeatPumpDisposition() (rejectPumpOn bool, coldPumpOn bool, heatPumpOn bo
 		log.Println(err)
 		return
 	}
-	rejectPumpOn = (rejectPump > 99) && rejectPumpRelay && !rejectPumpFlow
+	//	log.Println("Reject Pump=", rejectPump, "Reject Pump Relay=", rejectPumpRelay, "Reject Pump Flow=", rejectPumpFlow)
+	rejectPumpOn = (rejectPump > 99) && rejectPumpRelay && rejectPumpFlow
 	coldPump, err := mbus.ReadHoldingRegister(3, lastPumpData.SlaveAddress())
 	if err != nil {
 		log.Println(err)
@@ -392,7 +394,8 @@ func getHeatPumpDisposition() (rejectPumpOn bool, coldPumpOn bool, heatPumpOn bo
 		log.Println(err)
 		return
 	}
-	coldPumpOn = (coldPump > 99) && coldPumpRelay && !coldPumpFlow
+	coldPumpOn = (coldPump > 99) && coldPumpRelay && coldPumpFlow
+	//	log.Println("Cold Pump=", coldPump, "Cold Pump Relay=", coldPumpRelay, "Cold Pump Flow=", coldPumpFlow)
 	heatPumpOn, err = mbus.ReadCoil(17, lastHeatPumpData.SlaveAddress())
 	if err != nil {
 		return
@@ -424,6 +427,8 @@ func killPumps(delay time.Duration) {
 				if err != nil {
 					log.Print(err)
 				}
+			} else {
+				log.Println("Waiting for the heat pump to stop.")
 			}
 			// Wait 5 seconds then loop until the pumps are all stopped.
 			time.Sleep(time.Second * 5)
@@ -473,6 +478,7 @@ func webStopHeatPump(w http.ResponseWriter, _ *http.Request) {
 			return
 		}
 	}
+	log.Println("Killing Pumps in 15 seconds : reject", rejectPump, "cold", coldPump)
 	if rejectPump || coldPump {
 		// Wait 15 seconds before stopping the other pumps
 		go killPumps(15 * time.Second)
